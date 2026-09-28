@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Practice application · JobRadar Autofill</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/css/base.css?v={{ v }}">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"JobPosting","title":"Junior Accountant",
+"hiringOrganization":{"@type":"Organization","name":"Practice Company"},"jobLocation":{"address":{"addressLocality":"Tunis","addressCountry":"TN"}}}</script>
+<style>
+  body { background: var(--bg); }
+  main { max-width: 760px; margin: 30px auto; padding: 0 16px 60px; }
+  .card { padding: 26px; }
+  h1 { font-size: 24px; } .sub { color: var(--text-2); margin: 6px 0 22px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  fieldset { border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 0; }
+  legend { font-weight: 700; font-size: 14px; padding: 0 6px; }
+  .radios label { margin-right: 18px; font-weight: 600; }
+  .req { color: var(--danger); }
+  #result { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; background: var(--surface-2); border-radius: 10px; padding: 12px; margin-top: 16px; }
+  .note { background: var(--info-soft); color: var(--info); border-radius: 12px; padding: 12px 14px; font-weight: 600; font-size: 14px; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="note">Practice page: click the JobRadar Autofill button (or press Alt+Shift+F). Nothing on this page is sent anywhere.</div>
+  <div class="card">
+    <h1>Apply for Junior Accountant</h1>
+    <p class="sub">Practice Company · Tunis</p>
+    <form id="application_form" class="stack">
+      <div class="row2">
+        <div class="field"><label for="first_name">First Name <span class="req">*</span></label><input class="input" id="first_name" name="job_application[first_name]" required></div>
+        <div class="field"><label for="last_name">Last Name <span class="req">*</span></label><input class="input" id="last_name" name="job_application[last_name]" required></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label for="email">Email <span class="req">*</span></label><input class="input" id="email" type="email" name="job_application[email]" required></div>
+        <div class="field"><label for="tel">Téléphone</label><input class="input" id="tel" type="tel" name="telephone"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label for="ville">Ville de résidence</label><input class="input" id="ville" name="ville"></div>
+        <div class="field"><label for="pays">Pays</label>
+          <select class="select" id="pays" name="pays"><option value="">— Choisir —</option><option>France</option><option>Morocco</option><option>Tunisia</option><option>Germany</option></select></div>
+      </div>
+      <div class="field"><label for="li">LinkedIn Profile</label><input class="input" id="li" name="urls[LinkedIn]" placeholder="https://linkedin.com/in/..."></div>
+      <div class="field"><label for="site">Portfolio / Website</label><input class="input" id="site" name="website"></div>
+      <div class="row2">
+        <div class="field"><label for="exp">Years of experience</label><input class="input" id="exp" name="experience_years"></div>
+        <div class="field"><label for="sal">Prétentions salariales</label><input class="input" id="sal" name="salary"></div>
+      </div>
+      <div class="field"><label for="resume">Resume / CV <span class="req">*</span></label><input id="resume" type="file" name="resume" accept=".pdf,.doc,.docx" required></div>
+      <fieldset class="radios"><legend>Are you legally authorized to work in this country? <span class="req">*</span></legend>
+        <label><input type="radio" name="auth" value="yes"> Yes</label><label><input type="radio" name="auth" value="no"> No</label></fieldset>
+      <div class="field"><label for="spons">Will you now or in the future require visa sponsorship?</label>
+        <select class="select" id="spons" name="sponsorship"><option value="">Select…</option><option>Yes</option><option>No</option></select></div>
+      <div class="field"><label for="cl">Lettre de motivation</label><textarea class="textarea" id="cl" name="cover_letter" rows="6"></textarea></div>
+      <div class="field"><label for="why">What makes you unique? (answer in your own words) <span class="req">*</span></label><textarea class="textarea" id="why" name="custom_question_1" required></textarea></div>
+      <fieldset><legend>Voluntary self-identification</legend>
+        <div class="row2">
+          <div class="field"><label for="gender">Gender</label><select class="select" id="gender" name="gender"><option value="">Decline</option><option>Female</option><option>Male</option></select></div>
+          <div class="field"><label for="race">Race / Ethnicity</label><select class="select" id="race" name="race"><option value="">Decline</option><option>Option A</option></select></div>
+        </div>
+      </fieldset>
+      <button class="btn btn-primary btn-lg" type="submit">Submit application</button>
+      <div id="result" hidden></div>
+    </form>
+  </div>
+</main>
+<script src="/static/js/autofill_test.js?v={{ v }}"></script>
+</body>
+</html>

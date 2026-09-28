@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JobRadar Autofill - Options</title>
+<style>
+  body { font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif; background: #f6f5f3; color: #1c1b19; margin: 0; }
+  main { max-width: 620px; margin: 40px auto; padding: 0 18px; }
+  .card { background: #fff; border-radius: 18px; padding: 24px; box-shadow: 0 1px 2px rgba(0,0,0,.06); border: 1px solid #e6e2dd; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } p { color: #5f5b55; margin: 6px 0 16px; }
+  label { display: block; font-weight: 700; font-size: 13px; color: #5f5b55; margin: 12px 0 6px; }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #d4cfc8; font: inherit; }
+  button { margin-top: 14px; padding: 10px 16px; border-radius: 10px; border: 1px solid #d4cfc8; background: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  .pri { background: #5b5bd6; color: #fff; border-color: #5b5bd6; }
+  #status { margin-top: 14px; font-weight: 700; } .ok { color: #16a34a; } .err { color: #d33a2c; }
+  ol { padding-left: 20px; color: #5f5b55; } code { background: #f1efec; padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>JobRadar Autofill</h1>
+    <p>Connect the extension to your JobRadar. Your profile and CV stay on your computer.</p>
+    <label for="token">Pairing code</label>
+    <input id="token" placeholder="JR-…  (JobRadar → My profile → Browser helper)">
+    <label for="base">JobRadar address</label>
+    <input id="base" value="http://127.0.0.1:5090">
+    <button class="pri" id="save">Save &amp; test connection</button>
+    <div id="status"></div>
+  </div>
+  <div class="card">
+    <h1 style="font-size:18px">Forms embedded from job systems</h1>
+    <p>Some career pages show the application form inside a frame from Greenhouse, Lever or others. To fill those too, allow the extension to read forms on the pages you choose to fill. It still only runs when you click it.</p>
+    <button id="wide">Allow filling embedded forms</button>
+    <div id="wideStatus"></div>
+  </div>
+  <div class="card">
+    <h1 style="font-size:18px">How to use</h1>
+    <ol>
+      <li>Open a job application page.</li>
+      <li>Click the JobRadar icon in the toolbar, or press <code>Alt+Shift+F</code>.</li>
+      <li>Check every filled field (green), answer the ones in amber, then click the site's own Submit button.</li>
+      <li>Click <b>Mark as applied</b> - the job moves to Applied in your JobRadar pipeline.</li>
+    </ol>
+    <p>Practice first on the safe test form: <a href="http://127.0.0.1:5090/autofill-test" target="_blank">127.0.0.1:5090/autofill-test</a></p>
+  </div>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

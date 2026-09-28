@@ -1,0 +1,10 @@
+flask>=3.0
+waitress>=3.0
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+phonenumbers>=8.13
+openpyxl>=3.1
+dnspython>=2.4
+pymupdf>=1.24
+python-docx>=1.1

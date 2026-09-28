@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.bak
+.venv/
+venv/
+
+# Your data: jobs, profile, CVs, app passwords (stored in the database) - never commit
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.log
+.installed
+legacy_data.txt
+run_out.txt
+run_err.txt
+
+# Build output (recreated by build.ps1)
+build_embed/
+build_cache/
+installer_output/
+dist/
+build/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
