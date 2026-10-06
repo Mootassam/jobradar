@@ -1,11 +1,13 @@
 /* JobRadar Autofill - background service worker.
-   Talks to your local JobRadar (http://127.0.0.1:5090) with your pairing code, and injects the form filler into the
+   Talks to your local JobRadar (http://127.0.0.1:5110) with your pairing code, and injects the form filler into the
    tab you clicked on. It never runs on a page unless you click the button / press Alt+Shift+F. */
-const DEFAULTS = { base: "http://127.0.0.1:5090", token: "" };
+const DEFAULTS = { base: "http://127.0.0.1:5110", token: "" };
 
 async function config() {
   const c = await chrome.storage.local.get(DEFAULTS);
-  return { base: (c.base || DEFAULTS.base).replace(/\/+$/, ""), token: c.token || "" };
+  let base = (c.base || DEFAULTS.base).replace(/\/+$/, "");
+  if (base === "http://127.0.0.1:5090") base = DEFAULTS.base;   // JobRadar moved off 5090 (that port is ClientGuard's)
+  return { base, token: c.token || "" };
 }
 
 async function call(path, opts = {}) {

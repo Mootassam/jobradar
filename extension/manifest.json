@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobRadar Autofill",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fills job application forms from your JobRadar profile and CV. You always review and click Submit yourself.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],

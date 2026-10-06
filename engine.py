@@ -269,6 +269,8 @@ class Runner:
                 if not matches(job, self.q, skip_keywords=src.server_search):
                     continue
                 jid, is_new = store.upsert_job(job)
+                if jid is None:          # the user deleted this job - don't bring it back
+                    continue
                 store.run("INSERT OR IGNORE INTO run_jobs(run_id, job_id, is_new) VALUES(?,?,?)", (self.run_id, jid, 1 if is_new else 0))
                 with self.lock:
                     self.found += 1

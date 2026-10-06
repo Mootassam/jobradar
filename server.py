@@ -1,6 +1,6 @@
 """JobRadar - worldwide job search engine for personal use.
 
-Run: python server.py  ->  http://127.0.0.1:5090
+Run: python server.py  ->  http://127.0.0.1:5110
 Local only (binds 127.0.0.1). Write requests must carry the X-JobRadar header, which a foreign website
 cannot add without CORS approval - so other pages in your browser can't drive your local JobRadar."""
 import csv
@@ -158,6 +158,22 @@ def api_run(rid):
     return ok(run=run_out(r))
 
 
+@app.route("/api/runs/<int:rid>", methods=["DELETE"])
+def api_run_delete(rid):
+    if rid in engine.RUNS:
+        raise ApiError("Stop this search before deleting it.")
+    return ok(count=store.delete_runs([rid]))
+
+
+@app.route("/api/runs/delete", methods=["POST"])
+def api_runs_delete():
+    """Delete search history (the jobs found stay in All jobs). all=true -> every finished search."""
+    d = body()
+    ids = [r["id"] for r in store.q("SELECT id FROM runs")] if d.get("all") else [int(i) for i in d.get("ids") or []]
+    active = [i for i in ids if i in engine.RUNS]
+    return ok(count=store.delete_runs([i for i in ids if i not in engine.RUNS]), skipped_running=len(active))
+
+
 @app.route("/api/runs/<int:rid>/stop", methods=["POST"])
 def api_run_stop(rid):
     return ok(stopped=engine.stop_run(rid))
@@ -204,8 +220,7 @@ def api_jobs():
 @app.route("/api/jobs/<int:jid>", methods=["GET", "PATCH", "DELETE"])
 def api_job(jid):
     if request.method == "DELETE":
-        store.run("DELETE FROM jobs WHERE id = ?", (jid,))
-        return ok()
+        return ok(count=store.delete_jobs([jid]))
     if request.method == "PATCH":
         d = body()
         if "status" in d:
@@ -235,10 +250,15 @@ def api_jobs_bulk():
     if "hidden" in d:
         store.set_status(ids, hidden=bool(d["hidden"]))
     if d.get("delete"):
-        with store.tx() as c:
-            for i in ids:
-                c.execute("DELETE FROM jobs WHERE id = ?", (i,))
+        return ok(count=store.delete_jobs(ids))
     return ok(count=len(ids))
+
+
+@app.route("/api/jobs/delete-matching", methods=["POST"])
+def api_jobs_delete_matching():
+    """'Delete all' on a job list: every job matching the list's current filters (not just the visible page)."""
+    ids = store.job_ids_matching(job_filters(body()))
+    return ok(count=store.delete_jobs(ids))
 
 
 EXPORT_COLS = [("Title", "title"), ("Company", "company"), ("Location", "location"), ("Country", "country"), ("Region", "region"),
@@ -347,6 +367,16 @@ def api_company(key):
     return ok(company=c)
 
 
+@app.route("/api/companies/delete", methods=["POST"])
+def api_companies_delete():
+    """Delete companies + their contacts (and, by default, their jobs). keys=[...] or all=true (+ current filters)."""
+    d = body()
+    keys = store.company_keys_matching(str(d.get("q") or ""), bool(d.get("has_contact"))) if d.get("all") else d.get("keys") or []
+    if not keys:
+        raise ApiError("Select at least one company.")
+    return ok(count=store.delete_companies(keys, with_jobs=d.get("with_jobs", True) is not False))
+
+
 @app.route("/api/companies/<path:key>/enrich", methods=["POST"])
 def api_company_enrich(key):
     c = enrich.enrich_company(key)
@@ -396,8 +426,16 @@ def api_people():
 
 @app.route("/api/people/<int:pid>", methods=["DELETE"])
 def api_person_delete(pid):
-    store.run("DELETE FROM people WHERE id = ?", (pid,))
-    return ok()
+    return ok(count=store.delete_people([pid]))
+
+
+@app.route("/api/people/delete", methods=["POST"])
+def api_people_delete():
+    d = body()
+    ids = store.people_ids_matching(people_filters(d)) if d.get("all") else d.get("ids") or []
+    if not ids and not d.get("all"):
+        raise ApiError("Select at least one person.")
+    return ok(count=store.delete_people(ids))
 
 
 @app.route("/api/export/people")
@@ -470,6 +508,11 @@ def api_search_edit(sid):
     if "params" in d:
         store.run("UPDATE searches SET params = ? WHERE id = ?", (json.dumps(d["params"]), sid))
     return ok()
+
+
+@app.route("/api/searches/delete-all", methods=["POST"])
+def api_searches_delete_all():
+    return ok(count=store.clear_table("searches"))
 
 
 @app.route("/api/searches/<int:sid>/run", methods=["POST"])
@@ -584,8 +627,25 @@ def api_boards():
 
 @app.route("/api/boards/<int:bid>", methods=["DELETE"])
 def api_board_delete(bid):
-    store.run("DELETE FROM boards WHERE id = ?", (bid,))
-    return ok()
+    return ok(count=store.delete_boards([bid]))
+
+
+@app.route("/api/boards/delete", methods=["POST"])
+def api_boards_delete():
+    """ids=[...] or all=true with the list filters (q, status)."""
+    d = body()
+    if d.get("all"):
+        where, args = ["1=1"], []
+        if d.get("status"):
+            where.append("status = ?")
+            args.append(d["status"])
+        if d.get("q"):
+            where.append("(slug LIKE ? OR company LIKE ?)")
+            args += ["%" + str(d["q"]) + "%"] * 2
+        ids = [r["id"] for r in store.q("SELECT id FROM boards WHERE %s" % " AND ".join(where), args)]
+    else:
+        ids = d.get("ids") or []
+    return ok(count=store.delete_boards(ids))
 
 
 @app.route("/api/boards/revive", methods=["POST"])
@@ -690,7 +750,7 @@ def ext_applied():
         title = str(d.get("title") or "").strip()[:200] or "Job application"
         job = engine.normalize({"title": title, "company": str(d.get("company") or "")[:120], "location": str(d.get("location") or "")[:120],
                                 "url": url, "apply_url": url, "description": str(d.get("description") or "")[:20000]}, "manual")
-        jid, _ = store.upsert_job(job)
+        jid, _ = store.upsert_job(job, force=True)       # you applied: bring it back even if deleted before
         store.refresh_companies([store.company_key(job["company"])])
     else:
         jid = row["id"]
@@ -836,6 +896,25 @@ def api_outreach_bulk():
     return ok(count=outreach.bulk(d.get("ids") or [], d["action"]))
 
 
+@app.route("/api/outreach/delete", methods=["POST"])
+def api_outreach_delete():
+    """ids=[...] or all=true for one tab: status 'active' (drafts/approved/failed) or 'done' (sent & replies)."""
+    d = body()
+    if d.get("all"):
+        groups = {"active": ("draft", "queued", "failed", "cancelled"), "done": ("sent", "replied", "bounced")}
+        st = groups.get(d.get("status"))
+        if not st:
+            raise ApiError("Choose which list to empty.")
+        with store.tx() as c:
+            n = c.execute("DELETE FROM outreach WHERE status IN (%s)" % ",".join("?" * len(st)), st).rowcount
+            c.execute("UPDATE outreach SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM outreach)")
+        return ok(count=n)
+    ids = d.get("ids") or []
+    if not ids:
+        raise ApiError("Select at least one email.")
+    return ok(count=outreach.bulk(ids, "delete"))
+
+
 @app.route("/api/outreach/templates", methods=["GET", "PUT"])
 def api_outreach_templates():
     if request.method == "PUT":
@@ -922,6 +1001,22 @@ def api_night_stop():
     return ok()
 
 
+@app.route("/api/night/<int:nid>", methods=["DELETE"])
+def api_night_delete(nid):
+    if nightly.running() and nightly.STATE.get("run_id") == nid:
+        raise ApiError("This scan is running - stop it first.")
+    store.run("DELETE FROM night_runs WHERE id = ?", (nid,))
+    return ok()
+
+
+@app.route("/api/night/delete-all", methods=["POST"])
+def api_night_delete_all():
+    keep = nightly.STATE.get("run_id") if nightly.running() else 0
+    with store.tx() as c:
+        n = c.execute("DELETE FROM night_runs WHERE id != ?", (keep or 0,)).rowcount
+    return ok(count=n)
+
+
 @app.route("/api/night/seen", methods=["POST"])
 def api_night_seen():
     store.run("UPDATE night_runs SET seen = 1")
@@ -953,6 +1048,17 @@ def api_alerts_status():
     return ok(state=alerts.STATE)
 
 
+@app.route("/api/notifications", methods=["DELETE"])
+def api_notifications_clear():
+    return ok(count=store.clear_table("notifications"))
+
+
+@app.route("/api/notifications/<int:nid>", methods=["DELETE"])
+def api_notification_delete(nid):
+    store.run("DELETE FROM notifications WHERE id = ?", (nid,))
+    return ok()
+
+
 @app.route("/api/notifications", methods=["GET", "POST"])
 def api_notifications():
     if request.method == "POST":
@@ -969,8 +1075,76 @@ def api_backup():
 
 
 @app.route("/api/health")
+@app.route("/api/ping")
 def health():
     return ok(app=app_paths.APP_NAME, version=app_paths.APP_VERSION)
+
+
+DATA_KINDS = {
+    "jobs": "every job (the pipeline included)",
+    "runs": "search history",
+    "companies": "companies and the contacts found for them",
+    "people": "recruiters and other people found",
+    "searches": "saved searches / alerts",
+    "outreach": "spontaneous applications (drafts, sent emails, replies)",
+    "night": "night scan reports",
+    "notifications": "notifications",
+    "signals": "hiring-signal history",
+    "cache": "downloaded page and career-board cache",
+    "cvs": "CV files",
+    "profile": "your profile details",
+}
+
+
+@app.route("/api/data/clear", methods=["POST"])
+def api_data_clear():
+    """Danger zone. what = one of DATA_KINDS or 'everything'; needs confirm='DELETE'."""
+    d = body()
+    if d.get("confirm") != "DELETE":
+        raise ApiError("Type DELETE to confirm.")
+    what = d.get("what")
+    kinds = list(DATA_KINDS) if what == "everything" else [what]
+    if any(k not in DATA_KINDS for k in kinds):
+        raise ApiError("Unknown data type.")
+    if engine.RUNS and any(k in ("jobs", "runs") for k in kinds):
+        raise ApiError("A search is running - stop it first.")
+    if nightly.running() and any(k in ("night", "jobs") for k in kinds):
+        raise ApiError("The night scan is running - stop it first.")
+    n = 0
+    for k in kinds:
+        if k == "jobs":
+            n += store.delete_all_jobs()
+        elif k == "runs":
+            n += store.delete_runs([r["id"] for r in store.q("SELECT id FROM runs")])
+        elif k == "companies":
+            n += store.delete_companies([r["key"] for r in store.q("SELECT key FROM companies")], with_jobs=False)
+        elif k == "people":
+            n += store.clear_table("people")
+        elif k == "searches":
+            n += store.clear_table("searches")
+        elif k == "outreach":
+            n += store.clear_table("outreach")
+        elif k == "night":
+            n += store.clear_table("night_runs")
+        elif k == "notifications":
+            n += store.clear_table("notifications")
+        elif k == "signals":
+            n += store.clear_table("postings")
+            store.run("UPDATE boards SET snapshots = 0, tracked_since = NULL")
+            store.run("UPDATE companies SET watch = 0")
+        elif k == "cache":
+            n += store.clear_table("pages")
+            store.run("UPDATE boards SET cache = NULL, last_fetch = NULL")
+        elif k == "cvs":
+            for c in profile.cvs():
+                profile.delete_cv(c["id"])
+                n += 1
+        elif k == "profile":
+            store.set_setting("profile", {})
+            n += 1
+    if "cvs" in kinds or "profile" in kinds:
+        matcher.poke()
+    return ok(count=n)
 
 
 # ---------------------------------------------------------------- startup
@@ -988,23 +1162,61 @@ def boot():
     store.run("UPDATE runs SET status = 'interrupted', finished_at = ? WHERE status = 'running'", (store.now(),))
 
 
+DEFAULT_PORT = 5110          # 5090 is ClientGuard's - every app of the family has its own port
+PORT_FILE = os.path.join(app_paths.DATA_DIR, "port.txt")
+
+
+def _port_free(port):
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _is_jobradar(port):
+    """True only if the program answering on this port really is JobRadar (not ClientGuard or another app)."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port, timeout=2) as r:
+            return json.loads(r.read().decode("utf-8")).get("app") == app_paths.APP_NAME
+    except Exception:
+        return False
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout) if sys.stdout else logging.NullHandler(),
                                   logging.FileHandler(os.path.join(app_paths.DATA_DIR, "jobradar.log"), encoding="utf-8")])
-    port = int(os.environ.get("JOBRADAR_PORT", "5090"))
     background = "--background" in sys.argv          # started by the night-scan wake task: no browser, quiet exit if running
     want_browser = "--open" in sys.argv or os.environ.get("JOBRADAR_OPEN_BROWSER") == "1"
-    s = socket.socket()
+    fixed = os.environ.get("JOBRADAR_PORT")
+    port = int(fixed or DEFAULT_PORT)
+    candidates = [port]
     try:
-        s.bind(("127.0.0.1", port))
+        last = int(open(PORT_FILE, encoding="utf-8").read().strip())
+        if not fixed and last != port:
+            candidates.append(last)
+    except (OSError, ValueError):
+        pass
+    for p in candidates:                              # second click on the icon: just show the open copy
+        if not _port_free(p) and _is_jobradar(p):
+            if not background:
+                webbrowser.open("http://127.0.0.1:%d/" % p)
+            return
+    if not _port_free(port):
+        if fixed:
+            print("Port %d is used by another program." % port)
+            return
+        port = next((p for p in range(DEFAULT_PORT + 1, DEFAULT_PORT + 60) if _port_free(p)), port)
+    try:
+        with open(PORT_FILE, "w", encoding="utf-8") as f:
+            f.write(str(port))
     except OSError:
-        if not background:
-            print("Port %d busy - JobRadar may already be running. Opening it." % port)
-            webbrowser.open("http://127.0.0.1:%d/" % port)     # second click on the icon: just show the open one
-        return
-    finally:
-        s.close()
+        pass
     boot()
     engine.start_scheduler()
     engine.backfill_insights()
@@ -1026,7 +1238,7 @@ def main():
     serve(app, host="127.0.0.1", port=port, threads=24, channel_timeout=120, ident="JobRadar")
 
 
-boot()
-
 if __name__ == "__main__":
     main()
+else:
+    boot()          # imported (tests): ready to use without the startup checks

@@ -3,7 +3,7 @@ import os
 import sys
 
 APP_NAME = "JobRadar"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")

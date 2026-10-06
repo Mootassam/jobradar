@@ -436,8 +436,11 @@ def bulk(ids, action):
                 r = store.q1("SELECT status FROM outreach WHERE id = ?", (i,))
                 if r and r["status"] in ("draft", "queued", "failed"):
                     store.run("UPDATE outreach SET status = 'cancelled' WHERE id = ?", (i,))
-            elif action == "delete":
-                store.run("DELETE FROM outreach WHERE id = ? AND status IN ('draft','cancelled','failed')", (i,))
+            elif action == "delete":           # any status: drafts, approved, sent history
+                with store.tx() as c:
+                    c.execute("UPDATE outreach SET parent_id = NULL WHERE parent_id = ?", (i,))
+                    if not c.execute("DELETE FROM outreach WHERE id = ?", (i,)).rowcount:
+                        continue
             elif action == "draft":
                 store.run("UPDATE outreach SET status = 'draft' WHERE id = ? AND status IN ('queued','cancelled','failed')", (i,))
             n += 1

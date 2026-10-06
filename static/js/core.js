@@ -256,17 +256,20 @@
     }
   });
 
-  function confirmDialog({ title = "Are you sure?", message = "", ok = "Confirm", danger = false, cancel = "Cancel" } = {}) {
+  // typeText: the user must type this word (e.g. "DELETE") before OK is enabled. extra: more nodes in the body.
+  function confirmDialog({ title = "Are you sure?", message = "", ok = "Confirm", danger = false, cancel = "Cancel", typeText = null, extra = null } = {}) {
     return new Promise((resolve) => {
       let result = false;
-      const okBtn = h("button.btn" + (danger ? ".btn-danger" : ".btn-primary"), { onclick: () => { result = true; m.close(); } }, ok);
+      const okBtn = h("button.btn" + (danger ? ".btn-danger" : ".btn-primary"), { disabled: !!typeText, onclick: () => { result = true; m.close(); } }, ok);
+      const inp = typeText ? h("input.input.confirm-type", { placeholder: "Type " + typeText + " to confirm", autocomplete: "off",
+        oninput: (e) => { okBtn.disabled = e.target.value.trim() !== typeText; } }) : null;
       const m = modal({
         title, size: "narrow",
-        body: h("p.muted", message),
+        body: h("div", h("p.muted", message), extra, inp),
         foot: [h("button.btn.btn-ghost", { onclick: () => m.close() }, cancel), okBtn],
         onClose: () => resolve(result),
       });
-      setTimeout(() => okBtn.focus(), 40);
+      setTimeout(() => (inp || okBtn).focus(), 40);
     });
   }
 

@@ -200,6 +200,9 @@ CREATE TABLE IF NOT EXISTS outreach (
 CREATE INDEX IF NOT EXISTS ix_outreach_status ON outreach(status, queued_at);
 CREATE INDEX IF NOT EXISTS ix_outreach_domain ON outreach(domain);
 
+-- jobs the user deleted: a later search must not bring them back
+CREATE TABLE IF NOT EXISTS deleted_jobs (uid TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS night_runs (
     id INTEGER PRIMARY KEY, started_at INTEGER NOT NULL, finished_at INTEGER, status TEXT NOT NULL DEFAULT 'running',
     trigger TEXT NOT NULL DEFAULT 'schedule', stages TEXT NOT NULL DEFAULT '[]', report TEXT NOT NULL DEFAULT '{}', seen INTEGER NOT NULL DEFAULT 0
@@ -342,12 +345,16 @@ def _merge_list(a, b, limit=30):
     return out[:limit]
 
 
-def upsert_job(j):
-    """Insert or merge one normalized job. Returns (job_id, is_new)."""
+def upsert_job(j, force=False):
+    """Insert or merge one normalized job. Returns (job_id, is_new); (None, False) for a job the user deleted."""
     uid = job_uid(j["title"], j.get("company", ""), j.get("country", ""), j.get("location", ""))
     ts = now()
     with tx() as c:
         row = c.execute("SELECT * FROM jobs WHERE uid = ?", (uid,)).fetchone()
+        if row is None and c.execute("SELECT 1 FROM deleted_jobs WHERE uid = ?", (uid,)).fetchone():
+            if not force:
+                return None, False
+            c.execute("DELETE FROM deleted_jobs WHERE uid = ?", (uid,))
         if row is None:
             cur = c.execute(
                 "INSERT INTO jobs(uid, title, company, company_key, company_domain, location, country, region, city, remote, "
@@ -516,7 +523,8 @@ SORTS = {
 }
 
 
-def list_jobs(f, page=1, per=50):
+def _job_where(f):
+    """(join, where_sql, args) for the job filters shared by the list, export and delete."""
     where, args = ["1=1"], []
     join = ""
     if f.get("q"):
@@ -582,7 +590,16 @@ def list_jobs(f, page=1, per=50):
         where.append("j.closed_at IS NULL")
     if not f.get("show_hidden"):
         where.append("j.hidden = 0")
-    sql_where = " AND ".join(where)
+    return join, " AND ".join(where), args
+
+
+def job_ids_matching(f):
+    join, sql_where, args = _job_where(f)
+    return [r["id"] for r in q("SELECT j.id FROM jobs j %s WHERE %s" % (join, sql_where), args)]
+
+
+def list_jobs(f, page=1, per=50):
+    join, sql_where, args = _job_where(f)
     total = q1("SELECT COUNT(*) AS n FROM jobs j %s WHERE %s" % (join, sql_where), args)["n"]
     order = SORTS.get(f.get("sort") or "newest", SORTS["newest"])
     rows = q("SELECT j.id, j.title, j.company, j.company_key, j.location, j.country, j.region, j.city, j.remote, j.worldwide, "
@@ -687,6 +704,114 @@ def board_fail(bid, err, dead=False):
     run("UPDATE boards SET last_error = ?, fails = fails + 1, last_fetch = ?, status = CASE WHEN ? THEN 'dead' ELSE status END "
         "WHERE id = ?", (str(err)[:200], now(), 1 if dead else 0, bid))
 
+
+
+# ---------------------------------------------------------------- deleting
+
+def _chunks(ids, n=400):
+    ids = list(ids)
+    for i in range(0, len(ids), n):
+        yield ids[i:i + n]
+
+
+def delete_jobs(ids, remember=True):
+    """Delete jobs (and their search-run links). remember=True keeps them from coming back in later searches."""
+    ids = [int(i) for i in ids or []]
+    n, ts = 0, now()
+    with tx() as c:
+        for ch in _chunks(ids):
+            ph = ",".join("?" * len(ch))
+            if remember:
+                c.execute("INSERT OR IGNORE INTO deleted_jobs(uid, at) SELECT uid, ? FROM jobs WHERE id IN (%s)" % ph, [ts] + ch)
+            c.execute("DELETE FROM run_jobs WHERE job_id IN (%s)" % ph, ch)
+            c.execute("UPDATE people SET job_id = NULL WHERE job_id IN (%s)" % ph, ch)
+            n += c.execute("DELETE FROM jobs WHERE id IN (%s)" % ph, ch).rowcount
+    return n
+
+
+def delete_all_jobs():
+    """Fresh start: every job, run link and the 'deleted' memory (so new searches find everything again)."""
+    with tx() as c:
+        n = c.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        c.execute("DELETE FROM jobs")
+        c.execute("DELETE FROM run_jobs")
+        c.execute("DELETE FROM deleted_jobs")
+        c.execute("UPDATE people SET job_id = NULL")
+    conn().execute("INSERT INTO jobs_fts(jobs_fts) VALUES('rebuild')")
+    return n
+
+
+def delete_runs(ids):
+    ids = [int(i) for i in ids or []]
+    n = 0
+    with tx() as c:
+        for ch in _chunks(ids):
+            ph = ",".join("?" * len(ch))
+            c.execute("DELETE FROM run_jobs WHERE run_id IN (%s)" % ph, ch)
+            n += c.execute("DELETE FROM runs WHERE id IN (%s)" % ph, ch).rowcount
+    return n
+
+
+def delete_companies(keys, with_jobs=True):
+    """Delete companies with the contacts found for them; with_jobs also deletes (and forgets) their jobs."""
+    keys = [str(k) for k in keys or [] if k]
+    n = 0
+    if with_jobs:
+        jids = []
+        for ch in _chunks(keys):
+            jids += [r["id"] for r in q("SELECT id FROM jobs WHERE company_key IN (%s)" % ",".join("?" * len(ch)), ch)]
+        delete_jobs(jids)
+    with tx() as c:
+        for ch in _chunks(keys):
+            ph = ",".join("?" * len(ch))
+            c.execute("DELETE FROM people WHERE company_key IN (%s)" % ph, ch)
+            n += c.execute("DELETE FROM companies WHERE key IN (%s)" % ph, ch).rowcount
+    return n
+
+
+def company_keys_matching(qtext="", has_contact=False):
+    where, args = ["1=1"], []
+    if qtext:
+        where.append("(c.name LIKE ? OR c.domain LIKE ?)")
+        args += ["%" + qtext + "%"] * 2
+    if has_contact:
+        where.append("(c.emails != '[]' OR c.phones != '[]')")
+    return [r["key"] for r in q("SELECT c.key FROM companies c WHERE %s" % " AND ".join(where), args)]
+
+
+def people_ids_matching(f):
+    rows, total = list_people(f, 1, 1)
+    if not total:
+        return []
+    rows, _ = list_people(f, 1, total)
+    return [r["id"] for r in rows]
+
+
+def delete_people(ids):
+    ids = [int(i) for i in ids or []]
+    n = 0
+    with tx() as c:
+        for ch in _chunks(ids):
+            n += c.execute("DELETE FROM people WHERE id IN (%s)" % ",".join("?" * len(ch)), ch).rowcount
+    return n
+
+
+def delete_boards(ids):
+    ids = [int(i) for i in ids or []]
+    n = 0
+    with tx() as c:
+        for ch in _chunks(ids):
+            ph = ",".join("?" * len(ch))
+            c.execute("DELETE FROM postings WHERE board_id IN (%s)" % ph, ch)
+            n += c.execute("DELETE FROM boards WHERE id IN (%s)" % ph, ch).rowcount
+    return n
+
+
+def clear_table(table):
+    """Wipe one whole table (danger zone)."""
+    assert table in ("searches", "notifications", "night_runs", "postings", "pages", "outreach", "people", "deleted_jobs")
+    with tx() as c:
+        return c.execute("DELETE FROM %s" % table).rowcount
 
 # ---------------------------------------------------------------- misc
 

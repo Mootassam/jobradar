@@ -3,7 +3,7 @@
 ; Build: powershell -ExecutionPolicy Bypass -File build.ps1   (stages build_embed\ then runs ISCC)
 
 #define MyAppName "JobRadar"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.5.0"
 #define MyAppPublisher "JobRadar"
 
 [Setup]
@@ -42,10 +42,13 @@ Source: "build_embed\app\*"; DestDir: "{app}\app"; Flags: recursesubdirs createa
 [InstallDelete]
 ; clean old program files on update (never the data in %LOCALAPPDATA%\JobRadar)
 Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\runtime"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\server.py"" --open"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\jobradar.ico"; Comment: "Worldwide job search"
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\server.py"" --open"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\jobradar.ico"; Comment: "Worldwide job search"; Tasks: desktopicon
+; Uninstall via the signed runtime - works even when Smart App Control blocks Inno's unsigned unins000.exe
+Name: "{autoprograms}\Uninstall {#MyAppName}"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\uninstall.py"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\jobradar.ico"; Comment: "Remove {#MyAppName}"
 
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\server.py"" --open"; WorkingDir: "{app}\app"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
@@ -79,14 +82,40 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Rc: Integer;
+  DataDir: String;
 begin
   { remove the optional "wake the PC for the night scan" task, if it was set up }
   if CurUninstallStep = usUninstall then
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "JobRadar Night Scan" /F', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  if CurUninstallStep = usPostUninstall then
+  begin
+    DataDir := ExpandConstant('{localappdata}\JobRadar');
+    if DirExists(DataDir) and not UninstallSilent() then
+      if MsgBox('Also delete your JobRadar data?' + #13#10 + #13#10 +
+                'This permanently removes your jobs, pipeline, CVs, profile and settings from this computer.' + #13#10 + #13#10 +
+                'Choose No to keep them (they come back if you reinstall).',
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(DataDir, True, True, True);
+  end;
+end;
+
+{ Point Windows' "Apps" uninstall entry at the signed-runtime uninstaller (uninstall.py). Inno's own
+  unins000.exe is unsigned, so Smart App Control can block it; python.exe is signed by the PSF.
+  Single-brace key on purpose: [Code] string literals are not constant-expanded. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Key: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7C1E9B42-5D3A-4F86-B2E0-JOBRADAR0001}_is1';
+    RegWriteStringValue(HKCU, Key, 'UninstallString', '"' + ExpandConstant('{app}\runtime\pythonw.exe') + '" "' + ExpandConstant('{app}\app\uninstall.py') + '"');
+    RegWriteStringValue(HKCU, Key, 'QuietUninstallString', '"' + ExpandConstant('{app}\runtime\python.exe') + '" "' + ExpandConstant('{app}\app\uninstall.py') + '" /quiet');
+  end;
 end;
 
 [UninstallDelete]
-; program files only - your jobs, CVs and profile in %LOCALAPPDATA%\JobRadar are never touched
+; program files only - your jobs, CVs and profile in %LOCALAPPDATA%\JobRadar are kept unless you choose to delete them
 Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\runtime"
 Type: dirifempty; Name: "{app}"

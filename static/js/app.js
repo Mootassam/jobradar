@@ -64,6 +64,35 @@
     pop.style.top = (r.bottom + 6 + window.scrollY) + "px";
     setTimeout(() => document.addEventListener("pointerdown", function off(e) { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("pointerdown", off); } }), 0);
   }
+  // Ask, then delete jobs. body = { ids } or the filters for "delete all matching".
+  async function deleteJobs(n, body, after) {
+    const many = n > 1;
+    if (!await confirmDialog({ title: many ? "Delete " + nfmt(n) + " jobs?" : "Delete this job?", danger: true, ok: many ? "Delete " + nfmt(n) : "Delete",
+      message: "They are removed from JobRadar and won't come back in later searches. Your companies and contacts are kept.",
+      typeText: n >= 200 ? "DELETE" : null })) return false;
+    try {
+      const r = body.ids ? await api.post("/api/jobs/bulk", { ids: body.ids, delete: true }) : await api.post("/api/jobs/delete-matching", body);
+      toast("Deleted " + nfmt(r.count) + " job" + (r.count === 1 ? "" : "s"), "ok");
+      refreshStats();
+      if (after) after();
+      return true;
+    } catch (e) { toast(e.message, "error"); return false; }
+  }
+  // Delete companies (+ their contacts). body = { keys } or { all, q, has_contact }.
+  async function deleteCompanies(n, body, after) {
+    const jobsCb = h("input", { type: "checkbox", checked: true });
+    if (!await confirmDialog({ title: n > 1 ? "Delete " + nfmt(n) + " companies?" : "Delete this company?", danger: true, ok: "Delete",
+      message: "The company profile and every recruiter / contact found for it are deleted.",
+      extra: h("label.switch", { style: { marginTop: "4px" } }, jobsCb, h("span.track"), "Also delete their jobs (they won't come back in searches)"),
+      typeText: n >= 100 ? "DELETE" : null })) return false;
+    try {
+      const r = await api.post("/api/companies/delete", Object.assign({ with_jobs: jobsCb.checked }, body));
+      toast("Deleted " + nfmt(r.count) + " compan" + (r.count === 1 ? "y" : "ies"), "ok");
+      refreshStats();
+      if (after) after();
+      return true;
+    } catch (e) { toast(e.message, "error"); return false; }
+  }
   function download(url) { const a = h("a", { href: url, download: "" }); document.body.append(a); a.click(); a.remove(); }
 
   // Typo-tolerant country matching: "tunisa" -> Tunisia, "morroco" -> Morocco, "usa"/"uk" aliases.
@@ -185,7 +214,12 @@
           p.email ? h("span.plink", icon("mail"), h("a", { href: "mailto:" + p.email }, p.email), copyBtn(p.email)) : null,
           p.phone ? h("span.plink", icon("phone"), h("a", { href: "tel:" + p.phone.replace(/\s/g, "") }, p.phone)) : null,
           p.linkedin ? h("span.plink", icon("linkedin"), h("a", { href: p.linkedin, target: "_blank", rel: "noopener" }, "LinkedIn")) : null,
-          p.url ? h("span.plink.faint", icon("link"), h("a", { href: p.url, target: "_blank", rel: "noopener", title: p.url }, "found on " + (p.source || "page"))) : null)));
+          p.url ? h("span.plink.faint", icon("link"), h("a", { href: p.url, target: "_blank", rel: "noopener", title: p.url }, "found on " + (p.source || "page"))) : null)),
+      opts.onDelete && p.id ? h("button.btn.btn-ghost.btn-sm.btn-icon.pdel", { title: "Delete this person", onclick: async (e) => {
+        e.stopPropagation();
+        if (!await confirmDialog({ title: "Delete " + p.name + "?", message: "Removed from your recruiters list. A later contact search on this company may find them again.", ok: "Delete", danger: true })) return;
+        try { await api.del("/api/people/" + p.id); toast("Deleted", "ok", { duration: 1400 }); opts.onDelete(); } catch (err) { toast(err.message, "error"); }
+      } }, icon("trash")) : null);
   }
 
   function emailGroups(c) {
@@ -199,7 +233,7 @@
   }
 
   // Full company profile (modal)
-  async function openCompany(key) {
+  async function openCompany(key, onDeleted) {
     const m = modal({ title: "Company", size: "wide", body: spin() });
     async function load() {
       let c;
@@ -222,11 +256,12 @@
             (c.socials || []).length ? h("div.row.wrap", { style: { marginTop: "6px" } }, c.socials.map((s) => h("a.small", { href: s, target: "_blank", rel: "noopener" }, s.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]))) : null),
           h("div", btn)),
         h("div.sec-title", icon("users", "icon"), "People to contact", h("span.badge", String(people.length))),
-        people.length ? h("div.people", people.map((p) => personRow(p))) :
+        people.length ? h("div.people", people.map((p) => personRow(p, { onDelete: load }))) :
           h("p.note", c.enriched_at ? "No named people are published on this company's website." : "Click “Find recruiters & contacts” to scan the company website."),
         (c.emails || []).length ? [h("div.sec-title", icon("mail", "icon"), "Emails"), emailGroups(c)] : null,
         (c.phones || []).length ? [h("div.sec-title", icon("phone", "icon"), "Phones"), h("div.row.wrap", c.phones.map((p) => h("a.plink", { href: "tel:" + p.replace(/\s/g, "") }, icon("phone"), p)))] : null,
         h("div.row", { style: { marginTop: "16px" } }, h("a.btn", { href: "#/jobs?company=" + encodeURIComponent(key), onclick: () => m.close() }, icon("briefcase"), "See their jobs"),
+          h("button.btn.btn-ghost.danger-text", { onclick: () => deleteCompanies(1, { keys: [key] }, () => { m.close(); if (onDeleted) onDeleted(); }) }, icon("trash"), "Delete company"),
           h("span.spacer"), c.enriched_at ? h("span.tiny.faint", (c.enrich_status || "") + " · " + TT.timeAgo(c.enriched_at) + " · " + (c.pages || []).length + " pages read") : null));
     }
     load();
@@ -241,6 +276,9 @@
     const listBox = h("div.card.jlist");
     const bulkBox = h("div");
     const countEl = h("span.muted.small");
+    let lastTotal = 0;
+    const delAllBtn = h("button.btn.btn-sm.btn-ghost.danger-text", { hidden: true, title: "Delete every job matching these filters (all pages)",
+      onclick: () => deleteJobs(lastTotal, filterBody(), () => { selected.clear(); drawBulk(); load(); }) }, icon("trash"), "Delete all");
     const tg = (key, ic, label) => {
       const b = h("button.tgl", { onclick: () => { state[key] = !state[key]; b.classList.toggle("on", state[key]); state.page = 1; load(); } }, icon(ic), label);
       return b;
@@ -259,7 +297,7 @@
       h("div.search-input", icon("search"), h("input.input", { placeholder: opts.searchPlaceholder || "Search in these jobs…", oninput: debounce((e) => { state.q = e.target.value; state.page = 1; load(); }, 250) })),
       tg("has_email", "mail", "Email"), tg("has_phone", "phone", "Phone"), tg("has_recruiter", "users", "Recruiter"),
       tg("has_salary", "dollar", "Salary"), tg("visa", "send", "Visa / relocation"), remoteTg,
-      matchSel, sortSel, exportBtn, countEl);
+      matchSel, sortSel, exportBtn, countEl, delAllBtn);
     const el = h("div", fbar, bulkBox, listBox);
 
     function qs(forExport) {
@@ -274,6 +312,12 @@
       return new URLSearchParams(p).toString();
     }
 
+    function filterBody() {
+      const p = Object.fromEntries(new URLSearchParams(qs(false)));
+      delete p.page; delete p.per; delete p.sort;
+      return p;
+    }
+
     function drawBulk() {
       if (!selected.size) return clear(bulkBox);
       const ids = [...selected];
@@ -283,6 +327,7 @@
         h("button.btn.btn-sm", { onclick: async () => { const r = await api.post("/api/enrich/bulk", { from_jobs: ids }); toast("Finding contacts for " + r.queued + " companies…", "info"); } }, icon("wand"), "Find contacts"),
         h("button.btn.btn-sm", { onclick: () => download("/api/export?format=xlsx&ids=" + ids.join(",") + "&" + qs(false)) }, icon("download"), "Export"),
         h("button.btn.btn-sm", { onclick: () => bulk({ hidden: true }, "Hidden") }, icon("eyeOff"), "Hide"),
+        h("button.btn.btn-sm.danger", { onclick: () => deleteJobs(ids.length, { ids }, () => { selected.clear(); drawBulk(); load(); }) }, icon("trash"), "Delete"),
         h("button.btn.btn-sm", { onclick: () => { selected.clear(); drawBulk(); $$(".jrow.sel", listBox).forEach((r) => { r.classList.remove("sel"); r.querySelector("input").checked = false; }); } }, "Clear")));
       async function bulk(payload, msg) {
         await api.post("/api/jobs/bulk", Object.assign({ ids }, payload));
@@ -333,8 +378,13 @@
       try {
         const res = await api.get("/api/jobs?" + qs(false));
         countEl.textContent = nfmt(res.total) + " jobs";
+        lastTotal = res.total;
+        delAllBtn.hidden = !res.total;
+        delAllBtn.lastChild.textContent = "Delete all " + nfmt(res.total);
         if (!res.jobs.length) mount(listBox, opts.emptyState ? opts.emptyState() : empty("search", "No jobs match", "Try fewer filters."));
-        else mount(listBox, res.jobs.map(row), res.pages > 1 ? h("div.pager",
+        else mount(listBox, h("label.jhead", h("input", { type: "checkbox", checked: res.jobs.every((j) => selected.has(j.id)),
+            onchange: (e) => { res.jobs.forEach((j) => (e.target.checked ? selected.add(j.id) : selected.delete(j.id))); drawBulk(); load(true); } }),
+          h("span", "Select all on this page")), res.jobs.map(row), res.pages > 1 ? h("div.pager",
           h("span", "Page " + res.page + " of " + nfmt(res.pages)),
           h("div.row", h("button.btn.btn-sm", { disabled: res.page <= 1, onclick: () => { state.page--; load(); window.scrollTo(0, 0); } }, icon("chevronLeft"), "Prev"),
             h("button.btn.btn-sm", { disabled: res.page >= res.pages, onclick: () => { state.page++; load(); window.scrollTo(0, 0); } }, "Next", icon("chevronRight")))) : null);
@@ -402,7 +452,8 @@
             j.apply_url || j.url ? h("a.btn.btn-primary", { href: j.apply_url || j.url, target: "_blank", rel: "noopener" }, icon("external"), "Open & apply") : null,
             j.status === "new" ? h("button.btn", { onclick: async () => { j = (await api("PATCH", "/api/jobs/" + id, { status: "saved" })).job; draw(); toast("Saved", "ok"); if (onChange) onChange(true); } }, icon("bookmark"), "Save") : null,
             statusSel, h("span.spacer"),
-            h("button.btn.btn-ghost.btn-sm", { onclick: async () => { await api("PATCH", "/api/jobs/" + id, { hidden: true }); toast("Hidden", "info"); close(); if (onChange) onChange(true); } }, icon("eyeOff"), "Hide"))),
+            h("button.btn.btn-ghost.btn-sm", { onclick: async () => { await api("PATCH", "/api/jobs/" + id, { hidden: true }); toast("Hidden", "info"); close(); if (onChange) onChange(true); } }, icon("eyeOff"), "Hide"),
+            h("button.btn.btn-ghost.btn-sm.danger-text", { onclick: async () => { if (await deleteJobs(1, { ids: [id] })) { close(); if (onChange) onChange(true); } } }, icon("trash"), "Delete"))),
         h("div.dr-body",
           h("div.contact-card",
             h("h4", icon("mail", "icon"), "Contacts in this job post"),
@@ -474,8 +525,10 @@
   async function showNotifs(e) {
     $$(".notif-pop").forEach((x) => x.remove());
     const res = await api.get("/api/notifications");
-    const pop = h("div.notif-pop", res.notifications.length ? res.notifications.map((n) => h("a", { href: n.link || "#/jobs", onclick: () => pop.remove() },
-      h("b", n.text), h("small", TT.timeAgo(n.created_at)))) : h("p.note", { style: { padding: "14px" } }, "No notifications yet. Saved searches that run on a schedule will notify you here."));
+    const pop = h("div.notif-pop", res.notifications.length ? [res.notifications.map((n) => h("a", { href: n.link || "#/jobs", onclick: () => pop.remove() },
+      h("b", n.text), h("small", TT.timeAgo(n.created_at)))),
+      h("button.notif-clear", { onclick: async () => { await api.del("/api/notifications"); pop.remove(); toast("Notifications cleared", "ok", { duration: 1400 }); } }, icon("trash"), "Clear all notifications")]
+      : h("p.note", { style: { padding: "14px" } }, "No notifications yet. Saved searches that run on a schedule will notify you here."));
     document.querySelector(".main").append(pop);
     api.post("/api/notifications", {});
     $("#notif-dot").hidden = true;
@@ -667,12 +720,30 @@
     async function drawRecent() {
       try {
         const res = await api.get("/api/runs");
-        const seen = new Set();
-        const items = res.runs.filter((r) => { const k = JSON.stringify([r.params.keywords, r.params.country, r.params.region, r.params.city]); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
-        mount(recentBox, items.length ? [h("span.small.muted", { style: { alignSelf: "center" } }, "Recent:"), items.map((r) => h("button", {
-          onclick: () => { runId = r.id; LS.set("jr_active_run", r.id); showResults(); poll(); },
-          title: "Show results (" + r.found + ")",
-        }, icon("clock"), (r.params.keywords || "All jobs") + (r.params.country ? " · " + flagOf(r.params.country) : "") + " · " + nfmt(r.found)))] : []);
+        const groups = new Map();          // same search repeated -> one chip, deleting it removes every repeat
+        const keyOf = (r) => JSON.stringify([r.params.keywords, r.params.country, r.params.region, r.params.city]);
+        res.runs.forEach((r) => { const k = keyOf(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+        const items = [...groups.values()].slice(0, 8);
+        const finished = res.runs.filter((r) => !r.active).map((r) => r.id);
+        const forget = async (ids, label) => {
+          try {
+            const x = await api.post("/api/runs/delete", ids === "all" ? { all: true } : { ids });
+            if (ids === "all" || ids.includes(runId)) { LS.del("jr_active_run"); runId = null; clear(progBox); mount(listWrap, h("div.card", empty("radar", "Ready when you are", "Type a job title and hit Search."))); }
+            toast(label + (x.skipped_running ? " (a running search was kept)" : ""), "ok");
+            drawRecent();
+          } catch (e) { toast(e.message, "error"); }
+        };
+        mount(recentBox, items.length ? [h("span.small.muted", { style: { alignSelf: "center" } }, "Recent:"), items.map((rs) => {
+          const r = rs[0];
+          return h("span.rchip", h("button", {
+            onclick: () => { runId = r.id; LS.set("jr_active_run", r.id); showResults(); poll(); },
+            title: "Show results (" + r.found + ")",
+          }, icon("clock"), (r.params.keywords || "All jobs") + (r.params.country ? " · " + flagOf(r.params.country) : "") + " · " + nfmt(r.found)),
+          h("button.rx", { title: "Remove from history (the jobs it found stay in All jobs)", onclick: () => forget(rs.filter((x) => !x.active).map((x) => x.id), "Removed from history") }, icon("x")));
+        }), finished.length ? h("button.link.danger-text", { onclick: async () => {
+          if (await confirmDialog({ title: "Clear search history?", message: "Every past search is removed from the history. The jobs they found stay in All jobs.", ok: "Clear history", danger: true }))
+            forget("all", "Search history cleared");
+        } }, icon("trash"), "Clear history") : null] : []);
       } catch (_) { /* ignore */ }
     }
 
@@ -725,11 +796,14 @@
       const data = await Promise.all(cols.map((c) => api.get("/api/jobs?status=" + c + "&per=200&sort=found")));
       mount(board, cols.map((c, i) => {
         const col = h("div.col", { dataset: { st: c } },
-          h("div.col-head", icon(STATUS[c][1], "icon"), STATUS[c][0], h("span.n", String(data[i].total))),
+          h("div.col-head", icon(STATUS[c][1], "icon"), STATUS[c][0], h("span.n", String(data[i].total)),
+            data[i].total ? h("button.btn.btn-ghost.btn-sm.btn-icon.col-del", { title: "Delete all jobs in " + STATUS[c][0],
+              onclick: () => deleteJobs(data[i].total, { status: c }, load) }, icon("trash")) : null),
           data[i].jobs.map((j) => {
             const card = h("div.kcard", { draggable: "true", dataset: { id: j.id }, onclick: () => openJob(j.id, load),
               ondragstart: (e) => { e.dataTransfer.setData("text/plain", j.id); card.classList.add("dragging"); },
               ondragend: () => card.classList.remove("dragging") },
+              h("button.btn.btn-ghost.btn-sm.btn-icon.kdel", { title: "Delete this job", onclick: (e) => { e.stopPropagation(); deleteJobs(1, { ids: [j.id] }, load); } }, icon("trash")),
               h("b", j.title), h("small", (j.company || "") + " · " + flagOf(j.country) + " " + (j.city || j.country || (j.remote ? "Remote" : ""))));
             return card;
           }),
@@ -756,8 +830,18 @@
     subEl.textContent = "Every employer in your results — recruiters, emails and profile from their own websites";
     if (params && params.get("open")) setTimeout(() => openCompany(params.get("open")), 50);
     const st = { q: "", has: false, page: 1 };
+    const picked = new Set();
+    let total = 0;
     const statusBox = h("div");
+    const bulkBox = h("div");
     const tableBox = h("div.card");
+    function drawPick() {
+      mount(bulkBox, picked.size ? h("div.bulkbar", h("b", picked.size + " selected"), h("span.spacer"),
+        h("button.btn.btn-sm.danger", { onclick: () => deleteCompanies(picked.size, { keys: [...picked] }, () => { picked.clear(); drawPick(); load(); }) }, icon("trash"), "Delete"),
+        h("button.btn.btn-sm", { onclick: () => { picked.clear(); drawPick(); load(true); } }, "Clear")) : null);
+    }
+    const delAll = h("button.btn.btn-sm.btn-ghost.danger-text", { hidden: true, onclick: () => deleteCompanies(total, { all: true, q: st.q, has_contact: st.has },
+      () => { picked.clear(); drawPick(); st.page = 1; load(); }) }, icon("trash"), "Delete all");
     const bulkBtn = h("button.btn.btn-primary", { onclick: async () => {
       const r = await api.post("/api/enrich/bulk", { all_missing: true });
       toast("Finding contacts for " + r.queued + " companies in the background", "info");
@@ -766,8 +850,8 @@
     mount(actionsEl, bulkBtn);
     const hasTg = h("button.tgl", { onclick: () => { st.has = !st.has; hasTg.classList.toggle("on", st.has); st.page = 1; load(); } }, icon("mail"), "Has contacts");
     mount(content, statusBox,
-      h("div.fbar", h("div.search-input", icon("search"), h("input.input", { placeholder: "Search companies or domains…", oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 250) })), hasTg),
-      tableBox);
+      h("div.fbar", h("div.search-input", icon("search"), h("input.input", { placeholder: "Search companies or domains…", oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 250) })), hasTg, h("span.spacer"), delAll),
+      bulkBox, tableBox);
     let wt = null;
     async function watch() {
       clearTimeout(wt);
@@ -783,17 +867,24 @@
     async function load(silent) {
       if (!silent) mount(tableBox, spin());
       const res = await api.get("/api/companies?" + new URLSearchParams({ q: st.q, has_contact: st.has ? 1 : "", page: st.page }));
-      if (!res.companies.length) return mount(tableBox, empty("building", "No companies yet", "Companies appear here after your searches."));
+      total = res.total;
+      delAll.hidden = !res.total;
+      delAll.lastChild.textContent = "Delete all " + nfmt(res.total);
+      if (!res.companies.length) return mount(tableBox, empty("building", st.q || st.has ? "No companies match" : "No companies yet", "Companies appear here after your searches."));
+      const pageKeys = res.companies.map((c) => c.key);
+      const head = h("input", { type: "checkbox", title: "Select all on this page", checked: pageKeys.every((k) => picked.has(k)),
+        onchange: (e) => { pageKeys.forEach((k) => (e.target.checked ? picked.add(k) : picked.delete(k))); drawPick(); load(true); } });
       mount(tableBox, h("div.table-wrap", h("table.dtable",
-        h("thead", h("tr", ["Company", "Jobs", "People", "Countries", "Emails", "Phones", "Status", ""].map((c) => h("th", c)))),
+        h("thead", h("tr", h("th.w-cb", head), ["Company", "Jobs", "People", "Countries", "Emails", "Phones", "Status", ""].map((c) => h("th", c)))),
         h("tbody", res.companies.map((c) => {
           const btn = h("button.btn.btn-sm", { onclick: () => withBusy(btn, async () => {
             try { await api.post("/api/companies/" + encodeURIComponent(c.key) + "/enrich", {}); toast("Updated " + c.name, "ok"); load(true); }
             catch (e) { toast(e.message, "error"); }
           }) }, icon("wand"), c.enriched_at ? "Again" : "Find recruiters");
           const types = c.email_types || {};
-          return h("tr",
-            h("td", h("div.row", logo(c.name, 34), h("div", h("a.strong", { href: "#", onclick: (e) => { e.preventDefault(); openCompany(c.key); } }, c.name),
+          return h("tr" + (picked.has(c.key) ? ".sel" : ""),
+            h("td.w-cb", h("input", { type: "checkbox", checked: picked.has(c.key), onchange: (e) => { e.target.checked ? picked.add(c.key) : picked.delete(c.key); drawPick(); e.target.closest("tr").classList.toggle("sel", e.target.checked); } })),
+            h("td", h("div.row", logo(c.name, 34), h("div", h("a.strong", { href: "#", onclick: (e) => { e.preventDefault(); openCompany(c.key, () => load(true)); } }, c.name),
               h("div.tiny", c.domain ? h("a", { href: "https://" + c.domain, target: "_blank", rel: "noopener" }, c.domain) : h("span.faint", "no website yet"), " ",
                 h("button.btn.btn-ghost.btn-sm", { style: { minHeight: "22px", padding: "0 6px" }, title: "Set website", onclick: () => setDomain(c) }, icon("edit")))))),
             h("td", h("a", { href: "#/jobs?company=" + encodeURIComponent(c.key) }, nfmt(c.jobs_count))),
@@ -805,7 +896,8 @@
               c.emails.length > 3 ? h("span.faint", "+" + (c.emails.length - 3)) : null),
             h("td.small", c.phones.slice(0, 2).map((p) => h("div", h("a", { href: "tel:" + p.replace(/\s/g, "") }, p)))),
             h("td.tiny.muted", c.enriched_at ? [c.enrich_status, h("br"), TT.timeAgo(c.enriched_at)] : "—"),
-            h("td", btn));
+            h("td", h("div.row", { style: { gap: "4px", flexWrap: "nowrap" } }, btn,
+              h("button.btn.btn-ghost.btn-sm.btn-icon", { title: "Delete company", onclick: () => deleteCompanies(1, { keys: [c.key] }, () => { picked.delete(c.key); drawPick(); load(true); }) }, icon("trash")))));
         })))),
         res.pages > 1 ? h("div.pager", h("span", "Page " + res.page + " of " + res.pages + " · " + nfmt(res.total) + " companies"),
           h("div.row", h("button.btn.btn-sm", { disabled: res.page <= 1, onclick: () => { st.page--; load(); } }, icon("chevronLeft")),
@@ -837,6 +929,15 @@
         const r = await api.post("/api/enrich/bulk", { all_missing: true });
         toast("Scanning " + r.queued + " company websites for recruiters — see progress on Companies", "info", { duration: 5000 });
       } }, icon("wand"), "Find recruiters for all new companies"));
+    let shownTotal = 0;
+    const delAll = h("button.btn.btn-sm.btn-ghost.danger-text", { hidden: true, onclick: async () => {
+      if (!await confirmDialog({ title: "Delete " + nfmt(shownTotal) + " people?", danger: true, ok: "Delete all",
+        message: "Everyone matching the current filters is removed from your recruiters list.", typeText: shownTotal >= 100 ? "DELETE" : null })) return;
+      try {
+        const r = await api.post("/api/people/delete", { all: true, q: st.q, role: st.role, has_email: st.has_email ? 1 : "", country: st.country });
+        toast("Deleted " + nfmt(r.count) + " people", "ok"); st.page = 1; load();
+      } catch (e) { toast(e.message, "error"); }
+    } }, icon("trash"), "Delete all");
     const roleSeg = h("div.seg", [["", "All"], ["hr", "HR / Recruiting"], ["leader", "Leadership"], ["manager", "Hiring managers"]].map(([v, l]) =>
       h("button" + (v === st.role ? ".on" : ""), { onclick: (e) => { st.role = v; st.page = 1; $$("button", roleSeg).forEach((b) => b.classList.toggle("on", b === e.currentTarget)); load(); } }, l)));
     const mailTg = h("button.tgl", { onclick: () => { st.has_email = !st.has_email; mailTg.classList.toggle("on", st.has_email); st.page = 1; load(); } }, icon("mail"), "Has email");
@@ -844,11 +945,14 @@
     combo.style.minWidth = "200px";
     mount(content, countsBox,
       h("div.fbar", h("div.search-input", icon("search"), h("input.input", { placeholder: "Search name, title, company or email…", oninput: debounce((e) => { st.q = e.target.value; st.page = 1; load(); }, 250) })),
-        roleSeg, mailTg, combo),
+        roleSeg, mailTg, combo, h("span.spacer"), delAll),
       listBox);
     async function load() {
       mount(listBox, spin());
       const res = await api.get("/api/people?" + qs());
+      shownTotal = res.total;
+      delAll.hidden = !res.total;
+      delAll.lastChild.textContent = "Delete all " + nfmt(res.total);
       const c = res.counts || {};
       const total = Object.values(c).reduce((a, b) => a + b, 0);
       mount(countsBox,
@@ -861,7 +965,7 @@
           total ? "Try another filter." : "Open a job and click “Find recruiters & contacts”, or scan all companies at once.",
           total ? null : h("a.btn.btn-primary", { href: "#/companies" }, icon("building"), "Go to Companies"))));
       }
-      mount(listBox, h("div.card", h("div.people.people-list", res.people.map((p) => personRow(p, { company: true })))),
+      mount(listBox, h("div.card", h("div.people.people-list", res.people.map((p) => personRow(p, { company: true, onDelete: load })))),
         res.pages > 1 ? h("div.pager", h("span", "Page " + res.page + " of " + res.pages + " · " + nfmt(res.total) + " people"),
           h("div.row", h("button.btn.btn-sm", { disabled: res.page <= 1, onclick: () => { st.page--; load(); } }, icon("chevronLeft")),
             h("button.btn.btn-sm", { disabled: res.page >= res.pages, onclick: () => { st.page++; load(); } }, icon("chevronRight")))) : null);
@@ -879,7 +983,12 @@
     async function load() {
       const res = await api.get("/api/searches");
       if (!res.searches.length) return mount(box, h("div.card", empty("bell", "No saved searches", "On the Search page, set your filters and click “Save as alert”.", h("a.btn.btn-primary", { href: "#/search" }, "Go to Search"))));
-      mount(box, h("div.card", h("div.table-wrap", h("table.dtable",
+      mount(box, h("div.row", { style: { justifyContent: "flex-end", marginBottom: "8px" } },
+        h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: async () => {
+          if (!await confirmDialog({ title: "Delete all " + res.searches.length + " saved searches?", message: "Their schedules stop. Jobs already found stay in All jobs.", ok: "Delete all", danger: true })) return;
+          const r = await api.post("/api/searches/delete-all", {}); toast("Deleted " + r.count + " saved search(es)", "ok"); load();
+        } }, icon("trash"), "Delete all")),
+        h("div.card", h("div.table-wrap", h("table.dtable",
         h("thead", h("tr", ["Search", "Schedule", "Last run", "New", ""].map((c) => h("th", c)))),
         h("tbody", res.searches.map((s) => {
           const p = s.params;
@@ -893,7 +1002,7 @@
             h("td", h("div.row", { style: { justifyContent: "flex-end" } },
               h("button.btn.btn-sm", { onclick: async () => { const r = await api.post("/api/searches/" + s.id + "/run", {}); LS.set("jr_active_run", r.run_id); LS.set("jr_last_query", p); location.hash = "#/search"; } }, icon("play"), "Run"),
               h("button.btn.btn-sm", { onclick: async () => { await api.post("/api/searches/" + s.id + "/seen", {}); LS.set("jr_last_query", p); location.hash = "#/search"; } }, "Open"),
-              h("button.btn.btn-sm.btn-ghost.btn-icon", { "aria-label": "Delete", onclick: async () => { if (await confirmDialog({ title: "Delete “" + s.name + "”?", ok: "Delete", danger: true })) { await api.del("/api/searches/" + s.id); load(); } } }, icon("trash")))));
+              h("button.btn.btn-sm.btn-ghost.btn-icon", { "aria-label": "Delete", title: "Delete", onclick: async () => { if (await confirmDialog({ title: "Delete “" + s.name + "”?", ok: "Delete", danger: true })) { await api.del("/api/searches/" + s.id); toast("Deleted", "ok", { duration: 1400 }); load(); } } }, icon("trash")))));
         }))))));
     }
     const st = META.settings;
@@ -995,14 +1104,26 @@
           h("div.card",
             h("div.fbar", { style: { padding: "12px 12px 0" } }, q,
               sel([["", "All statuses"], ["ok", "OK"], ["empty", "Empty"], ["new", "Not fetched yet"], ["dead", "Dead"]], filter.status || "", (v) => drawBoards(Object.assign({}, filter, { status: v }))),
-              h("button.btn.btn-sm", { onclick: async () => { await api.post("/api/boards/revive", {}); toast("Dead boards will be retried", "ok"); drawBoards(filter); } }, icon("refresh"), "Retry dead")),
+              h("button.btn.btn-sm", { onclick: async () => { await api.post("/api/boards/revive", {}); toast("Dead boards will be retried", "ok"); drawBoards(filter); } }, icon("refresh"), "Retry dead"),
+              res.boards.length ? h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: async () => {
+                const all = !filter.q && !filter.status;
+                const n = all ? res.total : res.boards.length;
+                if (!await confirmDialog({ title: "Remove " + nfmt(n) + " company boards?", danger: true, ok: "Remove",
+                  message: (all ? "Every company career board" : "All boards matching this filter") + " is removed from the sources (with its hiring-signal history). Jobs already found are kept.",
+                  typeText: n >= 50 ? "DELETE" : null })) return;
+                const r = await api.post("/api/boards/delete", { all: true, q: filter.q || "", status: filter.status || "" });
+                toast("Removed " + nfmt(r.count) + " boards", "ok"); drawBoards(filter);
+              } }, icon("trash"), filter.q || filter.status ? "Remove shown" : "Remove all") : null),
             h("div.table-wrap", { style: { maxHeight: "420px", overflow: "auto" } }, h("table.dtable",
               h("thead", h("tr", ["Company", "System", "Jobs", "Status", ""].map((c) => h("th", c)))),
               h("tbody", res.boards.map((b) => h("tr",
                 h("td", h("b", b.company || b.slug), h("div.tiny.faint", b.slug + (b.discovered_from && b.discovered_from !== "seed" ? " · found via " + b.discovered_from.slice(0, 30) : ""))),
                 h("td.small", b.provider), h("td.num", nfmt(b.jobs_count)),
                 h("td", h("span.badge." + ({ ok: "ok", dead: "danger", empty: "", new: "info" }[b.status] || ""), b.status), b.last_error ? h("div.tiny.faint", b.last_error.slice(0, 40)) : null),
-                h("td", h("button.btn.btn-ghost.btn-sm.btn-icon", { "aria-label": "Remove", onclick: async () => { await api.del("/api/boards/" + b.id); drawBoards(filter); } }, icon("trash")))))))))));
+                h("td", h("button.btn.btn-ghost.btn-sm.btn-icon", { "aria-label": "Remove", title: "Remove", onclick: async () => {
+                  if (!await confirmDialog({ title: "Remove " + (b.company || b.slug) + "?", message: "JobRadar stops checking this career board. Jobs already found are kept.", ok: "Remove", danger: true })) return;
+                  await api.del("/api/boards/" + b.id); toast("Removed", "ok", { duration: 1400 }); drawBoards(filter);
+                } }, icon("trash")))))))))));
     }
     drawSources();
     await drawBoards();
@@ -1034,7 +1155,12 @@
         ondragover: (e) => { e.preventDefault(); drop.classList.add("over"); }, ondragleave: () => drop.classList.remove("over"),
         ondrop: (e) => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); } },
         icon("upload", "icon"), h("b", "Add a CV version"), h("span.tiny.faint", "PDF recommended · Word, ODT, RTF, TXT · max 10 MB"), file);
-      mount(cvBox, drop, data.cvs.length ? h("div.cv-list", data.cvs.map((c) => {
+      mount(cvBox, drop, data.cvs.length > 1 ? h("div.row", { style: { justifyContent: "flex-end", margin: "8px 0 -4px" } },
+        h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: async () => {
+          if (!await confirmDialog({ title: "Delete all " + data.cvs.length + " CVs?", message: "The CV files are removed from this computer's JobRadar folder.", ok: "Delete all", danger: true })) return;
+          await api.post("/api/data/clear", { what: "cvs", confirm: "DELETE" }); data = await api.get("/api/profile"); toast("All CVs deleted", "ok"); drawCvs();
+        } }, icon("trash"), "Delete all CVs")) : null,
+        data.cvs.length ? h("div.cv-list", data.cvs.map((c) => {
         const label = h("input.input.cv-label", { value: c.label, title: "Name this version (e.g. Developer CV, French CV)",
           onchange: async (e) => { data = await api.put("/api/profile/cv/" + c.id, { label: e.target.value }); toast("Renamed", "ok", { duration: 1200 }); } });
         return h("div.cv-item",
@@ -1482,7 +1608,9 @@
       mount(box,
         h("div.row.wrap", { style: { marginBottom: "12px" } },
           h("span.muted.small", drafts.length + " draft(s) · " + r.items.filter((i) => i.status === "queued").length + " approved, waiting · " + r.items.filter((i) => i.status === "failed").length + " failed"),
-          h("span.spacer"), mbBtn, drafts.length ? approveAll : null),
+          h("span.spacer"), mbBtn,
+          h("button.btn.btn-ghost.danger-text", { onclick: () => delOutreach({ all: true, status: "active" }, r.items.length, tabQueue) }, icon("trash"), "Delete all"),
+          drafts.length ? approveAll : null),
         h("div.drafts", r.items.map((it) => draftCard(it, cvOpts))));
     }
     function draftCard(it, cvOpts) {
@@ -1503,7 +1631,7 @@
         h("div.grid-2", { style: { margin: "10px 0" } }, field("To", to), field("Subject", subj)), body,
         h("div.row.wrap", { style: { marginTop: "10px" } }, h("span.small.muted", it.kind === "followup" ? "Follow-ups are sent in the same thread, without attachment." : "CV attached:"), it.kind === "followup" ? null : cv, h("span.spacer"),
           h("button.btn.btn-sm.btn-ghost", { onclick: () => preview(it.id) }, icon("eye"), "Preview"),
-          editable ? h("button.btn.btn-sm.btn-ghost", { onclick: async () => { await api.del("/api/outreach/" + it.id); toast("Deleted", "info"); tabQueue(); refreshStatus(); } }, icon("trash"), "Delete") : null,
+          h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: () => delOutreach({ ids: [it.id] }, 1, tabQueue) }, icon("trash"), "Delete"),
           it.status === "queued" ? h("button.btn.btn-sm", { onclick: async () => { await api.post("/api/outreach/bulk", { ids: [it.id], action: "draft" }); tabQueue(); refreshStatus(); } }, icon("undo"), "Back to draft") : null,
           editable ? h("button.btn.btn-sm.btn-primary", { onclick: (e) => withBusy(e.currentTarget, async () => {
             try {
@@ -1534,16 +1662,18 @@
       }) }, icon("inbox"), "Check replies now");
       const KIND = { interview: ["Interview / positive", "ok"], rejection: ["Not this time", ""], auto: ["Auto-reply", "info"], other: ["Replied", "accent"], bounce: ["Bounced", "danger"] };
       mount(box,
-        h("div.row", { style: { marginBottom: "12px" } }, h("span.muted.small", nfmt(r.total) + " sent · replies are detected in your inbox every 15 minutes (read-only)"), h("span.spacer"), checkBtn),
+        h("div.row", { style: { marginBottom: "12px" } }, h("span.muted.small", nfmt(r.total) + " sent · replies are detected in your inbox every 15 minutes (read-only)"), h("span.spacer"),
+          r.total ? h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: () => delOutreach({ all: true, status: "done" }, r.total, () => tabSent(1)) }, icon("trash"), "Delete all history") : null, checkBtn),
         !r.items.length ? h("div.card", empty("inbox", "Nothing sent yet", "Approved emails appear here once they're sent.")) :
           h("div.card", h("div.table-wrap", h("table.dtable",
-            h("thead", h("tr", ["Company", "To", "Sent", "Status", "Their answer"].map((x) => h("th", x)))),
+            h("thead", h("tr", ["Company", "To", "Sent", "Status", "Their answer", ""].map((x) => h("th", x)))),
             h("tbody", r.items.map((i) => {
               const k = i.status === "bounced" ? KIND.bounce : i.status === "replied" ? (KIND[i.reply_kind] || KIND.other) : null;
               return h("tr", h("td", h("b", i.company || "-"), i.kind === "followup" ? h("div.tiny.faint", "follow-up") : null), h("td.small", i.to_email),
                 h("td.small.muted", i.sent_at ? TT.fmtDateTime(i.sent_at) : "-"),
                 h("td", k ? h("span.badge" + (k[1] ? "." + k[1] : ""), k[0]) : h("span.badge", "Sent · waiting")),
-                h("td.small", i.reply_snippet ? h("div.reply", i.reply_snippet) : h("span.faint", i.status === "sent" ? "no answer yet" : "")));
+                h("td.small", i.reply_snippet ? h("div.reply", i.reply_snippet) : h("span.faint", i.status === "sent" ? "no answer yet" : "")),
+                h("td", h("button.btn.btn-ghost.btn-sm.btn-icon", { title: "Delete from history", onclick: () => delOutreach({ ids: [i.id], sent: true }, 1, () => tabSent(page)) }, icon("trash"))));
             }))))), pager(r, (p) => tabSent(p)));
     }
 
@@ -1606,6 +1736,14 @@
         h("div.card.card-pad.stack", { style: { marginTop: "16px" } }, h("h3", icon("edit", "icon"), " Email templates"),
           h("div.row.wrap", h("span.hint", "Filled in for each company:"), t.placeholders.map((p) => h("code.ph", p))),
           h("div.grid-2", { style: { alignItems: "start" } }, tplBoxes), h("div.row", saveTpl)));
+    }
+
+    async function delOutreach(body, n, after) {
+      if (!await confirmDialog({ title: n > 1 ? "Delete " + nfmt(n) + " emails?" : "Delete this email?", danger: true, ok: "Delete",
+        message: body.status === "done" || body.sent ? "Deleted from your history. Careful: JobRadar then no longer knows you wrote to " + (n > 1 ? "these companies" : "this company") + " and could suggest writing again."
+          : "Drafts and approved emails that are deleted are never sent.", typeText: n >= 50 ? "DELETE" : null })) return;
+      try { const r = await api.post("/api/outreach/delete", body); toast("Deleted " + nfmt(r.count) + " email(s)", "ok"); after(); refreshStatus(); }
+      catch (e) { toast(e.message, "error"); }
     }
 
     function show() { ({ find: tabFind, queue: tabQueue, sent: tabSent, settings: tabSettings })[tab](); }
@@ -1699,12 +1837,24 @@
       const last = r.history[0];
       drawRunBtn(r.running);
       if (!last) { mount(right, h("div.card", empty("moon", "No deep scan yet", "Click “Run the deep scan now” to try it - or wait for tonight."))); }
-      else mount(right, reportCard(last) || null, progressCard(last));
+      else mount(right, reportCard(last) || null, progressCard(last),
+        last.status !== "running" ? h("div.row", { style: { justifyContent: "flex-end" } }, h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: () => delNight([last.id]) }, icon("trash"), "Delete this report")) : null);
       const past = r.history.slice(1).filter((x) => x.report && x.report.headline);
-      mount(histBox, past.length ? [h("div.sec-title", icon("clock", "icon"), "Previous nights"),
-        h("div.card", h("div.table-wrap", h("table.dtable", h("thead", h("tr", ["When", "Trigger", "Result", "Duration"].map((x) => h("th", x)))),
+      mount(histBox, past.length ? [h("div.sec-title", icon("clock", "icon"), "Previous nights", h("span.spacer"),
+        h("button.btn.btn-sm.btn-ghost.danger-text", { onclick: () => delNight("all") }, icon("trash"), "Delete all reports")),
+        h("div.card", h("div.table-wrap", h("table.dtable", h("thead", h("tr", ["When", "Trigger", "Result", "Duration", ""].map((x) => h("th", x)))),
           h("tbody", past.map((x) => h("tr", h("td.small", TT.fmtDateTime(x.started_at)), h("td.small.muted", x.trigger), h("td.small", x.report.headline.replace(/^☀️ Good morning - /, "")),
-            h("td.small.muted", x.finished_at ? Math.max(1, Math.round((x.finished_at - x.started_at) / 60)) + " min" : "-")))))))] : []);
+            h("td.small.muted", x.finished_at ? Math.max(1, Math.round((x.finished_at - x.started_at) / 60)) + " min" : "-"),
+            h("td", h("button.btn.btn-ghost.btn-sm.btn-icon", { title: "Delete this report", onclick: () => delNight([x.id]) }, icon("trash")))))))))] : []);
+    }
+    async function delNight(ids) {
+      const all = ids === "all";
+      if (!await confirmDialog({ title: all ? "Delete all night reports?" : "Delete this report?", ok: "Delete", danger: true,
+        message: "Only the report is deleted - the jobs and contacts the scan found stay in JobRadar." })) return;
+      try {
+        if (all) await api.post("/api/night/delete-all", {}); else await api.del("/api/night/" + ids[0]);
+        toast("Deleted", "ok", { duration: 1400 }); poll();
+      } catch (e) { toast(e.message, "error"); }
     }
     async function poll() {
       clearTimeout(timer);
@@ -1742,9 +1892,41 @@
         h("p.note", "Everything is stored on this computer only. Automatic backups run at every start (last 10 kept)."),
         h("div.row", h("a.btn", { href: "/api/backup" }, icon("download"), "Download a backup now"),
           h("button.btn", { onclick: () => download("/api/export?format=xlsx") }, icon("download"), "Export all jobs to Excel"))),
+      dangerZone(),
       h("div.card.card-pad.stack", h("h3", "How JobRadar collects jobs"),
         h("p.note", "JobRadar only uses official/public job APIs and feeds, public company career boards, schema.org job data on websites you add (robots.txt respected), and your own alert emails. It identifies itself honestly, waits between requests to each site, and never bypasses logins, captchas or blocks. Contact details come from the job post itself or the company's own public website."),
         h("p.note", "Please use contact details responsibly: for your own applications, respecting each site's terms and privacy laws in your country."))));
+  }
+
+  function dangerZone() {
+    const KINDS = [
+      ["jobs", "All jobs", "Every job, including your pipeline (saved / applied / interview…)."],
+      ["runs", "Search history", "The list of past searches. The jobs they found stay."],
+      ["companies", "Companies & contacts", "Company profiles and the emails / phones found on their websites. Jobs stay."],
+      ["people", "Recruiters", "Every recruiter, HR person and manager found."],
+      ["searches", "Saved searches", "Your alerts and their schedules."],
+      ["outreach", "Spontaneous applications", "Drafts, sent emails and replies."],
+      ["night", "Night scan reports", "The morning reports. Settings stay."],
+      ["notifications", "Notifications", "The bell list."],
+      ["signals", "Hiring-signal history", "Career-page snapshots and watched companies."],
+      ["cache", "Download cache", "Saved web pages and career-board downloads (they are fetched again when needed)."],
+      ["cvs", "CV files", "Every CV version you uploaded."],
+      ["profile", "My profile", "Your name, contact details and answers used for autofill."],
+      ["everything", "Everything", "All of the above - a fresh start. Settings, API keys and sources are kept."],
+    ];
+    return h("div.card.card-pad.stack", h("h3", "Delete data"),
+      h("p.note", "Permanently remove data from this computer. Tip: download a backup first."),
+      h("div.danger-list", KINDS.map(([k, t, d]) => h("div.danger-row" + (k === "everything" ? ".all" : ""),
+        h("div", { style: { flex: 1, minWidth: 0 } }, h("b", t), h("div.tiny.muted", d)),
+        h("button.btn.btn-sm.btn-danger", { onclick: async () => {
+          if (!await confirmDialog({ title: "Delete " + t.toLowerCase() + "?", message: d + " This cannot be undone.", ok: "Delete permanently", danger: true, typeText: "DELETE" })) return;
+          try {
+            const r = await api.post("/api/data/clear", { what: k, confirm: "DELETE" });
+            toast("Done - " + nfmt(r.count) + " item(s) deleted", "ok");
+            if (k === "everything" || k === "runs") LS.del("jr_active_run");
+            refreshStats();
+          } catch (e) { toast(e.message, "error"); }
+        } }, icon("trash"), "Delete")))));
   }
 
   // ================================================================ boot

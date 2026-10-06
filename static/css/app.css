@@ -397,3 +397,37 @@ code.ph { font-family: var(--mono); font-size: 12px; background: var(--surface-2
 .report h3 { font-size: 17px; }
 .night-banner { text-decoration: none; color: inherit; margin-bottom: 14px; align-items: center; }
 .night-banner:hover { filter: brightness(.98); }
+
+/* ---- delete controls ---- */
+.danger-text { color: var(--danger, #dc2626) !important; }
+.bulkbar .btn.danger { --b-bg: #dc2626; background: #dc2626; color: #fff; }
+.jhead { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.jhead input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.dtable .w-cb { width: 36px; }
+.dtable tr.sel td { background: var(--accent-soft); }
+.dtable input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.kcard { position: relative; }
+.kcard .kdel { position: absolute; top: 4px; right: 4px; opacity: 0; min-height: 26px; padding: 0 6px; }
+.kcard:hover .kdel, .kcard .kdel:focus { opacity: 1; }
+.col-head .col-del { margin-left: auto; min-height: 26px; padding: 0 6px; }
+.col-head .n + .col-del { margin-left: 6px; }
+.person { position: relative; }
+.person .pdel { margin-left: auto; align-self: flex-start; opacity: .55; }
+.person:hover .pdel { opacity: 1; }
+.rchip { display: inline-flex; align-items: center; }
+.rchip .rx { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; display: grid; place-items: center; }
+.rchip .rx:hover { color: var(--danger, #dc2626); }
+.rchip .rx .icon { width: 13px; height: 13px; }
+.notif-clear { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-top: 1px solid var(--line); background: transparent; padding: 10px 14px; color: var(--danger, #dc2626); cursor: pointer; font: inherit; font-size: 13px; }
+.notif-clear .icon { width: 15px; height: 15px; }
+.danger-row { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.danger-row:last-child { border-bottom: 0; }
+.danger-row.all b { color: var(--danger, #dc2626); }
+.confirm-type { margin-top: 12px; }
+@media (hover: none) { .kcard .kdel { opacity: 1; } }
+.recent .rchip { border: 1px solid var(--line); border-radius: 99px; background: var(--surface); }
+.recent .rchip:hover { border-color: var(--line-strong); }
+.recent .rchip button { border: 0; background: transparent; }
+.recent .rchip button:first-child { padding-right: 4px; }
+.recent .rchip .rx { padding: 6px 10px 6px 2px; }
+.recent button.link { border: 0; background: transparent; }

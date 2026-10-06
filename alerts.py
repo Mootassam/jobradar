@@ -129,7 +129,9 @@ def _import(st):
                 job = engine.normalize(raw, raw["site"] + "-alert")
                 if not job:
                     continue
-                _, is_new = store.upsert_job(job)
+                jid, is_new = store.upsert_job(job)
+                if jid is None:          # deleted by the user earlier
+                    continue
                 STATE["imported"] += 1
                 STATE["new"] += 1 if is_new else 0
             STATE["message"] = "%d/%d emails · %d jobs" % (i + 1, len(ids), STATE["imported"])

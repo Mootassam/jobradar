@@ -1,8 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const WIDE = { origins: ["https://*/*", "http://*/*"] };
 
-chrome.storage.local.get({ base: "http://127.0.0.1:5090", token: "" }, (c) => {
-  $("base").value = c.base;
+chrome.storage.local.get({ base: "http://127.0.0.1:5110", token: "" }, (c) => {
+  $("base").value = c.base === "http://127.0.0.1:5090" ? "http://127.0.0.1:5110" : c.base;
   $("token").value = c.token;
 });
 
@@ -12,7 +12,7 @@ function status(text, ok) {
 }
 
 $("save").onclick = async () => {
-  const base = $("base").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:5090";
+  const base = $("base").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:5110";
   const token = $("token").value.trim();
   if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) return status("The address must be your local JobRadar (http://127.0.0.1:port).", false);
   await chrome.storage.local.set({ base, token });
